@@ -91,6 +91,7 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  SelectSeparator,
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -239,6 +240,57 @@ function Picker({
     </Select>
   );
 }
+const workspaceAction = {
+  add: '__waypoint_add_workspace__',
+  rename: '__waypoint_rename_workspace__',
+  remove: '__waypoint_remove_workspace__',
+};
+function WorkspacePicker({
+  value,
+  items,
+  onSwitch,
+  onAdd,
+  onRename,
+  onRemove,
+  canRemove,
+  disabled,
+}: {
+  value: string;
+  items: { value: string; label: string }[];
+  onSwitch: (value: string) => void;
+  onAdd: () => void;
+  onRename: () => void;
+  onRemove: () => void;
+  canRemove: boolean;
+  disabled: boolean;
+}) {
+  return (
+    <Select
+      value={value}
+      onValueChange={(next) => {
+        if (next === workspaceAction.add) onAdd();
+        else if (next === workspaceAction.rename) onRename();
+        else if (next === workspaceAction.remove) onRemove();
+        else if (next !== null && items.some((item) => item.value === next)) onSwitch(next);
+      }}
+    >
+      <SelectTrigger aria-label="Select workspace" className="picker" disabled={disabled}>
+        <SelectValue>{items.find((item) => item.value === value)?.label || 'Select…'}</SelectValue>
+      </SelectTrigger>
+      <SelectContent className="workspace-menu" alignItemWithTrigger={false}>
+        {items.map((item) => (
+          <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+        ))}
+        <SelectSeparator />
+        <SelectItem value={workspaceAction.add}><Plus size={15} /> Add workspace</SelectItem>
+        <SelectItem value={workspaceAction.rename}><Pencil size={15} /> Rename workspace</SelectItem>
+        <SelectItem value={workspaceAction.remove} disabled={!canRemove} className="workspace-action-remove">
+          <Trash2 size={15} /> Remove workspace
+        </SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
 function BlockNode({ data, type, selected }: NodeProps<Block>) {
   const kind = type as keyof typeof icons,
     Icon = icons[kind];
@@ -364,6 +416,9 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
   });
   const [validatedKey, setValidatedKey] = useState('');
   const [configOverride, setConfigOverride] = useState<string | null>(null);
+  const [workspaceEditor, setWorkspaceEditor] = useState<'create' | 'rename' | null>(null);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceError, setWorkspaceError] = useState('');
   const [logs, setLogs] = useState({ access: '', error: '' }),
     [confirm, setConfirm] = useState<{ kind: string; id?: string } | null>(
       null,
@@ -621,25 +676,47 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
     });
   };
   const createWorkspace = () => {
-    const name = window.prompt('Name your new workspace');
-    if (!name) return;
     if (dirty) {
       show('Save or discard unsaved changes before creating a workspace.', true);
       return;
     }
-    void act(async () => {
-      accept(await api('workspaces', { name, revision: state!.revision }));
-      setScope('draft');
-      show('Workspace created with its own configuration files.');
-    });
+    setWorkspaceName('');
+    setWorkspaceError('');
+    setWorkspaceEditor('create');
   };
   const renameWorkspace = () => {
-    const name = window.prompt('Rename workspace', state?.workspaces.find((w) => w.id === state.workspaceId)?.name);
-    if (!name) return;
-    void act(async () => {
-      accept(await api('workspaces/rename', { name, revision: state!.revision }, 'PUT'));
-      show('Workspace renamed.');
-    });
+    if (dirty) {
+      show('Save or discard unsaved changes before renaming this workspace.', true);
+      return;
+    }
+    setWorkspaceName(state?.workspaces.find((w) => w.id === state.workspaceId)?.name || '');
+    setWorkspaceError('');
+    setWorkspaceEditor('rename');
+  };
+  const submitWorkspaceEditor = async () => {
+    if (!workspaceEditor) return;
+    const name = workspaceName.trim();
+    if (!name || name.length > 80) {
+      setWorkspaceError('Enter a workspace name of 1–80 characters.');
+      return;
+    }
+    setBusy(true);
+    setWorkspaceError('');
+    try {
+      if (workspaceEditor === 'create') {
+        accept(await api('workspaces', { name, revision: state!.revision }));
+        setScope('draft');
+        show('Workspace created with its own configuration files.');
+      } else {
+        accept(await api('workspaces/rename', { name, revision: state!.revision }, 'PUT'));
+        show('Workspace renamed.');
+      }
+      setWorkspaceEditor(null);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'Could not save workspace.');
+    } finally {
+      setBusy(false);
+    }
   };
   const deleteWorkspace = () => {
     if (dirty) {
@@ -952,13 +1029,6 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
               <span>{state.workspaceId === state.liveWorkspaceId ? 'Currently deployed' : 'Independent draft'}</span>
             </div>
           </div>
-          <div className="workspace-manager">
-            <div className="workspace-manager-actions">
-              <button onClick={createWorkspace} disabled={busy} title="Create workspace"><Plus size={15} /> New</button>
-              <button onClick={renameWorkspace} disabled={busy} title="Rename workspace"><Pencil size={15} /> Rename</button>
-              <button onClick={deleteWorkspace} disabled={busy || state.workspaces.length < 2 || state.workspaceId === state.liveWorkspaceId} title="Remove workspace"><Trash2 size={15} /> Remove</button>
-            </div>
-          </div>
           <span className="nav-caption">Manage</span>
           <nav aria-label="Main navigation">
             {[
@@ -1231,11 +1301,15 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
                   <div className="toolbar-right">
                     <div className="toolbar-control toolbar-control-workspace">
                       <span>Workspace</span>
-                      <Picker
-                        label="Select workspace"
+                      <WorkspacePicker
                         value={state.workspaceId}
-                        onChange={switchWorkspace}
                         items={state.workspaces.map((w) => ({ value: w.id, label: w.name }))}
+                        onSwitch={switchWorkspace}
+                        onAdd={createWorkspace}
+                        onRename={renameWorkspace}
+                        onRemove={deleteWorkspace}
+                        canRemove={state.workspaces.length > 1 && state.workspaceId !== state.liveWorkspaceId}
+                        disabled={busy}
                       />
                     </div>
                     <div className="toolbar-control toolbar-control-version">
@@ -2401,6 +2475,36 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
           }}
         />
       )}
+      <Dialog open={workspaceEditor !== null} onOpenChange={(open) => !open && !busy && setWorkspaceEditor(null)}>
+        <DialogContent className="workspace-dialog">
+          <DialogTitle>{workspaceEditor === 'create' ? 'Add workspace' : 'Rename workspace'}</DialogTitle>
+          <DialogDescription>
+            {workspaceEditor === 'create'
+              ? 'Create a separate draft without changing live routing.'
+              : 'Give the current workspace a new name.'}
+          </DialogDescription>
+          <form onSubmit={(event) => { event.preventDefault(); void submitWorkspaceEditor(); }}>
+            <label className="field">
+              Workspace name
+              <input
+                autoFocus
+                required
+                maxLength={80}
+                value={workspaceName}
+                onChange={(event) => setWorkspaceName(event.target.value)}
+                placeholder="My workspace"
+              />
+            </label>
+            {workspaceError && <p className="notice error" role="alert">{workspaceError}</p>}
+            <div className="workspace-dialog-actions">
+              <button type="button" className="btn" disabled={busy} onClick={() => setWorkspaceEditor(null)}>Cancel</button>
+              <button type="submit" className="btn primary" disabled={busy || !workspaceName.trim()}>
+                {workspaceEditor === 'create' ? 'Create workspace' : 'Save name'}
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
       <AlertDialog
         open={!!confirm}
         onOpenChange={(open) => !open && !busy && setConfirm(null)}
