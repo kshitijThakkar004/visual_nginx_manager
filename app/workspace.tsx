@@ -953,12 +953,6 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
             </div>
           </div>
           <div className="workspace-manager">
-            <Picker
-              label="Select workspace"
-              value={state.workspaceId}
-              onChange={switchWorkspace}
-              items={state.workspaces.map((w) => ({ value: w.id, label: w.name }))}
-            />
             <div className="workspace-manager-actions">
               <button onClick={createWorkspace} disabled={busy} title="Create workspace"><Plus size={15} /> New</button>
               <button onClick={renameWorkspace} disabled={busy} title="Rename workspace"><Pencil size={15} /> Rename</button>
@@ -1235,18 +1229,30 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
                     </TabsList>
                   </Tabs>
                   <div className="toolbar-right">
-                    <Picker
-                      label="Workspace version"
-                      value={scope}
-                      onChange={(v) => {
-                        setScope(v);
-                        setSelected(null);
-                      }}
-                      items={[
-                        { value: 'draft', label: 'Draft' },
-                        { value: 'live', label: 'Deployed' },
-                      ]}
-                    />
+                    <div className="toolbar-control toolbar-control-workspace">
+                      <span>Workspace</span>
+                      <Picker
+                        label="Select workspace"
+                        value={state.workspaceId}
+                        onChange={switchWorkspace}
+                        items={state.workspaces.map((w) => ({ value: w.id, label: w.name }))}
+                      />
+                    </div>
+                    <div className="toolbar-control toolbar-control-version">
+                      <span>View</span>
+                      <Picker
+                        label="Workspace version"
+                        value={scope}
+                        onChange={(v) => {
+                          setScope(v);
+                          setSelected(null);
+                        }}
+                        items={[
+                          { value: 'draft', label: 'Draft' },
+                          { value: 'live', label: 'Deployed' },
+                        ]}
+                      />
+                    </div>
                     <button
                       className="icon-btn"
                       title="Export workspace"

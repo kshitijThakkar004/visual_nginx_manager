@@ -23,7 +23,6 @@ body {
   font-size: 15px;
 }
 .workspace-manager { padding: 0 13px 15px; }
-.workspace-manager .picker { width: 100%; background: #ffffff14; border: 1px solid #ffffff2b; color: #f3f6ed; }
 .workspace-manager-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .workspace-manager-actions button { display: inline-flex; align-items: center; gap: 4px; padding: 5px 6px; color: #c9d7cb; font-size: 11px; border-radius: 5px; }
 .workspace-manager-actions button:hover:not(:disabled) { background: #ffffff1b; }
@@ -594,6 +593,10 @@ textarea::placeholder {
   border-radius: 7px;
   font-size: 12px;
 }
+.toolbar-control { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.toolbar-control > span { color: #768176; font-size: 10px; font-weight: 600; line-height: 1; }
+.toolbar-control-workspace .picker { width: 164px; }
+.toolbar-control-version .picker { width: 126px; }
 .canvas-context {
   padding: 11px 21px;
   background: #fff;
@@ -1481,11 +1484,12 @@ textarea::placeholder {
   .canvas-metrics strong {
     font-size: 14px;
   }
-  .network-route .editor-toolbar,
-  .network-route .canvas-context {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-  }
+  .network-route .editor-toolbar { flex-wrap: wrap; overflow-x: visible; }
+  .network-route .toolbar-right { width: 100%; margin-left: 0; }
+  .network-route .toolbar-control-workspace { flex: 1; }
+  .network-route .toolbar-control-workspace .picker { width: 100%; }
+  .network-route .toolbar-control-version .picker { width: 105px; }
+  .network-route .canvas-context { flex-wrap: nowrap; overflow-x: auto; }
   .canvas-shortcuts {
     display: none;
   }
