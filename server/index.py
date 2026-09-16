@@ -82,6 +82,7 @@ class Manager:
         https_port: int = 8443,
         resolver: str = "127.0.0.11",
         discovery_socket: str = "/discovery/services.sock",
+        control_socket: str | None = None,
         shared_root: str = "/etc/nginx/waypoint",
         initial_workspace: str | Path | None = None,
         manage_nginx: bool | None = None,
@@ -94,13 +95,14 @@ class Manager:
         self.https_port = int(https_port)
         self.resolver = resolver
         self.mode = mode or ("preview" if manage_nginx is False else "standalone")
-        if self.mode not in {"preview", "standalone", "external"}:
-            raise ValueError("NGINX_MODE must be standalone, external, or preview.")
+        if self.mode not in {"preview", "standalone", "external", "systemd"}:
+            raise ValueError("NGINX_MODE must be standalone, external, systemd, or preview.")
         self.discovery_socket = discovery_socket
+        self.control_socket = control_socket or discovery_socket
         self.shared_root = shared_root
         self.initial_workspace = initial_workspace
         self.state_file = self.data_dir / "state.json"
-        self.active_file = self.root / ("waypoint.conf" if self.mode == "external" else "nginx.conf")
+        self.active_file = self.root / ("waypoint.conf" if self.uses_existing_nginx else "nginx.conf")
         self.lock = asyncio.Lock()
         self.sessions: dict[str, float] = {}
         self.failures: dict[str, tuple[int, float]] = {}
@@ -109,6 +111,10 @@ class Manager:
         self.rotation_task: asyncio.Task | None = None
         self.traffic = TrafficTailer(self.root / "access.log")
         self.state: dict[str, Any] = {}
+
+    @property
+    def uses_existing_nginx(self) -> bool:
+        return self.mode in {"external", "systemd"}
 
     def workspace(self) -> dict[str, Any]:
         return self.state["workspaces"][self.state["workspaceId"]]
@@ -158,7 +164,7 @@ class Manager:
             if self.initial_workspace:
                 graph = normalize_graph(json.loads(Path(self.initial_workspace).read_text(encoding="utf-8")))
             else:
-                graph = empty_graph() if self.mode == "external" else example_graph()
+                graph = empty_graph() if self.uses_existing_nginx else example_graph()
             self.state = {"revision": 0, "draft": graph, "applied": None, "history": [], "auth": None}
         if "workspaces" not in self.state:
             self.state.update(
@@ -195,7 +201,7 @@ class Manager:
             except Exception:
                 self.process.terminate()
                 raise
-        elif self.mode == "external":
+        elif self.uses_existing_nginx:
             try:
                 await self.assert_external(marker)
                 await self.control_external("reload")
@@ -254,7 +260,7 @@ class Manager:
 
     async def config(self, graph: dict[str, Any], marker: str = "preview") -> str:
         try:
-            external = self.mode == "external"
+            external = self.uses_existing_nginx
             return compile_graph(
                 graph,
                 root=self.shared_root + "/runtime" if external else str(self.root),
@@ -292,7 +298,7 @@ class Manager:
         return await asyncio.to_thread(invoke)
 
     async def control_external(self, action: str) -> dict[str, Any]:
-        return await request_json(self.discovery_socket, f"/nginx/{action}", method="POST")
+        return await request_json(self.control_socket, f"/nginx/{action}", method="POST")
 
     async def assert_external(self, marker: str) -> str:
         result = await self.control_external("check")
@@ -312,7 +318,7 @@ class Manager:
     async def check(self, text: str) -> str:
         if self.mode == "preview":
             return "Preview mode: Nginx is not running. Only graph validation is available."
-        if self.mode == "external":
+        if self.uses_existing_nginx:
             previous = self.active_file.read_text(encoding="utf-8")
             match = re.search(r"^# Waypoint deployment: ([\w-]+)$", text, re.M)
             try:
@@ -364,7 +370,7 @@ class Manager:
 
     async def apply(self, graph: dict[str, Any], override: str | None = None) -> dict[str, Any]:
         if self.mode == "preview":
-            raise HTTPException(400, "Deploy requires the Docker runtime. This server is in preview mode.")
+            raise HTTPException(400, "Deploy requires a managed Nginx runtime. This server is in preview mode.")
         marker = "r-" + secrets.token_hex(8)
         text = self.rendered_config(await self.config(graph, marker), override, marker)
         live_id = self.state.get("liveWorkspaceId")
@@ -375,7 +381,7 @@ class Manager:
         previous = self.active_file.read_text(encoding="utf-8")
         try:
             await self.write_active(text)
-            if self.mode == "external":
+            if self.uses_existing_nginx:
                 await self.assert_external(marker)
                 await self.control_external("reload")
             else:
@@ -406,7 +412,7 @@ class Manager:
             await self.write_active(previous)
             try:
                 old_marker = live["id"] if live else "initial"
-                if self.mode == "external":
+                if self.uses_existing_nginx:
                     await self.assert_external(old_marker)
                     await self.control_external("reload")
                 else:
@@ -440,7 +446,7 @@ class Manager:
                             file.replace(file.with_name(name + ".1"))
                             rotated = True
                     if rotated:
-                        if self.mode == "external":
+                        if self.uses_existing_nginx:
                             await self.control_external("reopen")
                         else:
                             await self.run_nginx(["-s", "reopen"])
@@ -518,7 +524,7 @@ def create_app(**options: Any) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        if manager.mode == "external":
+        if manager.uses_existing_nginx:
             try:
                 live_id = manager.state.get("liveWorkspaceId")
                 live = manager.state["workspaces"].get(live_id, {}).get("applied") if live_id else None
@@ -778,6 +784,7 @@ app = create_app(
     https_port=int(os.environ.get("PROXY_HTTPS_PORT", "8443")),
     resolver=os.environ.get("NGINX_RESOLVER", "127.0.0.11"),
     discovery_socket=os.environ.get("DISCOVERY_SOCKET", "/discovery/services.sock"),
+    control_socket=os.environ.get("NGINX_CONTROL_SOCKET"),
     shared_root=os.environ.get("NGINX_SHARED_ROOT", "/etc/nginx/waypoint"),
     initial_workspace=os.environ.get("INITIAL_WORKSPACE"),
 )

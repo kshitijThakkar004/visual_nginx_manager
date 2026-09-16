@@ -103,7 +103,13 @@ def merge_exposed_ports(container: dict[str, Any], inspected: dict[str, Any]) ->
     return {**container, "Ports": list(ports.values())}
 
 
-def discover_services(containers: list[dict[str, Any]], manager_id: str) -> dict[str, Any]:
+def discover_services(
+    containers: list[dict[str, Any]],
+    manager_id: str,
+    target: str = "container",
+) -> dict[str, Any]:
+    if target not in {"container", "host"}:
+        raise ValueError("DISCOVERY_TARGET must be container or host.")
     managers = [
         container
         for container in containers
@@ -115,6 +121,41 @@ def discover_services(containers: list[dict[str, Any]], manager_id: str) -> dict
             "Cannot identify one running Waypoint container. Check its waypoint.discovery label."
         )
     manager = managers[0]
+    if target == "host":
+        services: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, int]] = set()
+        for container in containers:
+            if container.get("State") != "running" or container.get("Id") == manager.get("Id"):
+                continue
+            if container.get("Labels", {}).get("waypoint.nginx-target") == manager_id:
+                continue
+            names = container.get("Names") or []
+            name = names[0].removeprefix("/") if names else str(container.get("Id", ""))[:12]
+            for port in container.get("Ports", []):
+                public_port = port.get("PublicPort")
+                if port.get("Type") != "tcp" or not isinstance(public_port, int):
+                    continue
+                address = port.get("IP") or "127.0.0.1"
+                if address == "0.0.0.0":
+                    address = "127.0.0.1"
+                elif address == "::":
+                    address = "::1"
+                key = (name, address, public_port)
+                if key in seen:
+                    continue
+                seen.add(key)
+                services.append(
+                    {
+                        "id": f"{container.get('Id')}:host:{address}:{public_port}",
+                        "name": name,
+                        "host": address,
+                        "port": public_port,
+                        "networks": ["host-published"],
+                    }
+                )
+        services.sort(key=lambda item: (item["name"].casefold(), item["port"], item["host"]))
+        return {"networks": ["host-published"], "services": services}
+
     networks = [
         name
         for name in manager.get("NetworkSettings", {}).get("Networks", {})
@@ -224,7 +265,10 @@ def create_discovery_app(
     *,
     docker_socket: str = "/var/run/docker.sock",
     manager_id: str = "waypoint",
+    target: str = "container",
 ) -> FastAPI:
+    if target not in {"container", "host"}:
+        raise ValueError("DISCOVERY_TARGET must be container or host.")
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     async def summaries() -> list[dict[str, Any]]:
@@ -245,7 +289,7 @@ def create_discovery_app(
                     containers.append(merge_exposed_ports(container, inspected))
                 except Exception:
                     containers.append(container)
-            return discover_services(containers, manager_id)
+            return discover_services(containers, manager_id, target)
         except Exception as exc:
             raise HTTPException(503, f"Docker discovery unavailable: {exc}") from exc
 
@@ -275,6 +319,7 @@ def create_discovery_app(
 app = create_discovery_app(
     docker_socket=os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock"),
     manager_id=os.environ.get("DISCOVERY_MANAGER_ID", "waypoint"),
+    target=os.environ.get("DISCOVERY_TARGET", "container"),
 )
 
 

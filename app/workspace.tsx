@@ -175,7 +175,7 @@ const explanations = {
     'The address people visit. Point its DNS record at this server so requests arrive here.',
   rule: 'The traffic director. Nginx chooses the longest matching path, then forwards the request to the connected service.',
   service:
-    'The application behind the proxy. Use its Docker service name on the same network, or a reachable IP address.',
+    'The application behind the proxy. Enter a hostname or IP address that your Nginx runtime can reach.',
 };
 const id = () =>
   Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
@@ -1066,16 +1066,18 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
             <div>
               <strong>
                 {state.nginxRunning
-                  ? state.mode === 'external'
+                  ? state.mode === 'external' || state.mode === 'systemd'
                     ? 'Connected to Nginx'
                     : 'Nginx is running'
-                  : state.mode === 'external'
+                  : state.mode === 'external' || state.mode === 'systemd'
                     ? 'Nginx disconnected'
                     : 'Preview mode'}
               </strong>
               <span>
-                {state.mode === 'external'
-                  ? 'Existing proxy · shared config'
+                {state.mode === 'external' || state.mode === 'systemd'
+                  ? state.mode === 'systemd'
+                    ? 'Systemd service · shared config'
+                    : 'Container service · shared config'
                   : state.mode === 'standalone'
                     ? 'Managed on this device'
                     : 'No live traffic changes'}
@@ -1618,7 +1620,9 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
                                   ? 'Scanning containers…'
                                   : scanError
                                     ? 'Refresh to try again.'
-                                    : 'No containers found on shared networks.'}
+                                    : state.mode === 'systemd'
+                                      ? 'No containers with published TCP ports found.'
+                                      : 'No containers found on shared networks.'}
                               </output>
                             )}
                             {!!discovered.length &&
@@ -2458,6 +2462,7 @@ function WorkspaceInner({ onLogout }: { onLogout: () => Promise<void> }) {
           open={wizard}
           onClose={() => setWizard(false)}
           graph={graph}
+          mode={state.mode}
           onAdd={(newNodes, newEdges) => {
             setGraph((g) => ({
               ...g,
@@ -2599,11 +2604,13 @@ function RouteWizard({
   open,
   onClose,
   graph,
+  mode,
   onAdd,
 }: {
   open: boolean;
   onClose: () => void;
   graph: Graph;
+  mode: string;
   onAdd: (nodes: Block[], edges: Edge[]) => void;
 }) {
   const [domain, setDomain] = useState(''),
@@ -2634,7 +2641,9 @@ function RouteWizard({
       setScanMessage(
         result.services.length
           ? `Found destinations on ${result.networks.join(', ')}. Select an HTTP service and confirm its port and protocol.`
-          : `No other running containers found on ${result.networks.join(', ') || 'a shared network'}. Attach your app to the same Docker network as Waypoint and scan again.`,
+          : mode === 'systemd'
+            ? 'No running containers expose a TCP port on the host. Publish the application port and scan again, or enter a destination manually.'
+            : `No other running containers found on ${result.networks.join(', ') || 'a shared network'}. Attach your app to the same Docker network as Waypoint and scan again.`,
       );
     } catch (e) {
       setScanMessage(e instanceof Error ? e.message : 'Scan failed.');
@@ -2840,9 +2849,10 @@ function RouteWizard({
                     ))}
                   </select>
                   <small>
-                    Ports are container ports. Unadvertised ports must be
-                    entered manually; discovery does not test application
-                    health.
+                    {mode === 'systemd'
+                      ? 'Ports are published host ports reachable by systemd Nginx.'
+                      : 'Ports are container ports on the shared Docker network.'}{' '}
+                    Discovery does not test application health.
                   </small>
                 </label>
               )}
