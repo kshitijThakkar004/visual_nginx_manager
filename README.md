@@ -1,10 +1,18 @@
 # Waypoint
 
-Waypoint is a visual manager for routes in an **existing Docker Nginx** container. Connect a domain and path to an application in the web UI, then Waypoint validates and reloads Nginx. It does not start a second public proxy or take over ports 80 and 443.
+Waypoint is a visual manager for routes in an existing Nginx installation. Nginx may run in a **Docker container** or as a **Linux systemd service**. Connect a domain and path to an application in the web UI, then Waypoint validates and reloads the existing Nginx. It does not start a second public proxy or take over ports 80 and 443.
 
 This is a v0.1 MVP for one administrator on one Docker host. It manages only routes you create in Waypoint. Your existing Nginx configuration and routes stay in place.
 
-## What you need
+## Choose your Nginx runtime
+
+Use the existing [Docker Nginx setup](#install-beside-an-existing-nginx-container) when Nginx itself is a container. Use the [systemd Nginx setup](#install-beside-a-systemd-nginx-service) when commands such as `systemctl status nginx` manage the host's Nginx service.
+
+For a standalone, repeatable walkthrough with explanations, verification, operations, and troubleshooting, see [SYSTEMD_NGINX_SETUP.md](SYSTEMD_NGINX_SETUP.md).
+
+Both setups bind the admin page to `127.0.0.1:81` by default. This loopback listener does **not** need a UFW incoming rule. Keep only the public Nginx listeners (normally 80 and 443) exposed; use an SSH tunnel rather than opening the admin port on a remote host.
+
+## Docker Nginx requirements
 
 - A running Nginx container on the same Docker host where you will run Waypoint. You must be able to recreate it to add a label, a shared mount, and the loader file.
 - Docker Engine and Docker Compose, with access to the Docker socket. Rootless Docker users must change the socket path in `compose.yaml`.
@@ -13,7 +21,7 @@ This is a v0.1 MVP for one administrator on one Docker host. It manages only rou
 
 The admin page binds to `127.0.0.1:81` by default. Port 81 may already be occupied; the steps below show how to change it.
 
-## Install beside your existing Nginx
+## Install beside an existing Nginx container
 
 ### 1. Clone and choose the shared network
 
@@ -130,7 +138,73 @@ docker compose up --build -d
 
 The control agent has Docker daemon authority through the socket and can run fixed check/reload/log operations against the uniquely labeled Nginx container. The web container does not receive the socket. Use this on a Docker host you administer and keep the admin interface private.
 
-Current limits: one host, one administrator, HTTP reverse proxying only; no ACME renewal, TCP/UDP streams, arbitrary import of existing Nginx routes, or multi-host control.
+## Install beside a systemd Nginx service
+
+This setup keeps Waypoint in Docker but controls the host's existing `nginx.service`. A small root-owned bridge accepts only three fixed operations over `/run/waypoint/nginx.sock`: configuration check, graceful reload, and log reopen. The web container cannot run arbitrary host commands and does not receive the systemd or D-Bus sockets.
+
+### 1. Install the local control bridge
+
+From this repository, copy the example environment file and run the installer:
+
+```sh
+cp .env.systemd.example .env.systemd
+sudo ./systemd/install-control.sh
+```
+
+The installer detects the host's Nginx binary, installs the bridge and unit, creates `/var/lib/waypoint`, and places a loader at `/etc/nginx/waypoint-loader.conf`. Set `NGINX_UNIT` only when the service has a different unit name:
+
+```sh
+sudo NGINX_UNIT=nginx-custom.service ./systemd/install-control.sh
+```
+
+### 2. Load Waypoint from the host Nginx configuration
+
+Add this line **inside the `http { ... }` block** in `/etc/nginx/nginx.conf`:
+
+```nginx
+include /etc/nginx/waypoint-loader.conf;
+```
+
+The supplied loader includes only `/var/lib/waypoint/runtime/waypoint*.conf`. It does not replace existing server blocks. If you change `WAYPOINT_DATA_DIR` in `.env.systemd`, update the path in `/etc/nginx/waypoint-loader.conf` to match.
+
+Validate and reload the host configuration once:
+
+```sh
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+If validation reports a duplicate `log_format`, `map`, listener, or server name, remove the overlapping Waypoint loader/config from any earlier installation; do not delete unrelated Nginx routes.
+
+### 3. Start Waypoint in systemd-target mode
+
+```sh
+docker compose --env-file .env.systemd -f compose.systemd.yaml up --build -d
+docker compose --env-file .env.systemd -f compose.systemd.yaml ps
+```
+
+Open `http://127.0.0.1:81`. Waypoint should show **Systemd service · shared config**. Useful diagnostics are:
+
+```sh
+sudo systemctl status waypoint-nginx-control nginx
+sudo journalctl -u waypoint-nginx-control -n 50
+docker compose --env-file .env.systemd -f compose.systemd.yaml logs waypoint waypoint-discovery
+```
+
+For Docker application containers behind a host Nginx, publish their application ports on loopback when possible:
+
+```yaml
+services:
+  notes:
+    ports:
+      - '127.0.0.1:3000:3000'
+```
+
+This does not require another UFW incoming rule. The service scanner intentionally offers the published host mapping (`127.0.0.1:3000` in this example), because a systemd Nginx cannot resolve Compose service names through Docker DNS. Non-container services can always be entered manually with a hostname/IP and port reachable from the host.
+
+Rootless Docker cannot access the root-only control socket in this initial systemd integration. Run this Compose stack with the host's rootful Docker service, and keep the admin bind on loopback.
+
+Current limits: one host, one administrator, HTTP reverse proxying only; no ACME renewal, TCP/UDP streams, arbitrary import of existing Nginx routes, rootless-Docker systemd control, or multi-host control.
 
 ## Local development
 

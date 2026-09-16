@@ -300,10 +300,14 @@ def compile_graph(
             f"  client_body_temp_path {_quote(root + '/client_temp')};",
             f"  proxy_temp_path {_quote(root + '/proxy_temp')};",
         ]
-    lines += [
-        f"{indent}log_format waypoint_json escape=json '{{\"route_id\":\"$waypoint_route_id\",\"timestamp\":\"$time_iso8601\",\"method\":\"$request_method\",\"status\":$status,\"response_time\":$request_time,\"upstream\":\"$upstream_addr\"}}';",
-        f'{indent}map $http_upgrade $waypoint_connection_upgrade {{ default upgrade; "" close; }}',
-    ]
+    # An empty include must remain valid before the first route is created.
+    # $waypoint_route_id is introduced by route server blocks (or the standalone
+    # default server), so do not reference it in an otherwise empty include.
+    if format == "standalone" or graph["nodes"]:
+        lines += [
+            f"{indent}log_format waypoint_json escape=json '{{\"route_id\":\"$waypoint_route_id\",\"timestamp\":\"$time_iso8601\",\"method\":\"$request_method\",\"status\":$status,\"response_time\":$request_time,\"upstream\":\"$upstream_addr\"}}';",
+            f'{indent}map $http_upgrade $waypoint_connection_upgrade {{ default upgrade; "" close; }}',
+        ]
     if format == "standalone":
         lines += [
             "  server {",

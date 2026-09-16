@@ -1,0 +1,24 @@
+[Unit]
+Description=Waypoint control bridge for systemd Nginx
+After=network.target
+
+[Service]
+Type=simple
+Environment=NGINX_BIN=/usr/sbin/nginx
+Environment=NGINX_UNIT=nginx.service
+EnvironmentFile=-/etc/waypoint/systemd-control.env
+ExecStart=/usr/bin/python3 /usr/local/libexec/waypoint-systemd-control --socket /run/waypoint/nginx.sock --nginx ${NGINX_BIN} --unit ${NGINX_UNIT}
+Restart=on-failure
+RuntimeDirectory=waypoint
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
